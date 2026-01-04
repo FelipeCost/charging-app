@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time
 from pathlib import Path
+import os
 
 st.set_page_config(page_title="Charging Log", layout="centered")
 
@@ -455,5 +456,9 @@ with tab_admin:
             st.cache_data.clear()
 
 
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8501))
+    os.system(f"streamlit run app.py --server.port {port} --server.address 0.0.0.0")
 
 
