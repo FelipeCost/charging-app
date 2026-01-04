@@ -1,0 +1,459 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime, time
+from pathlib import Path
+
+st.set_page_config(page_title="Charging Log", layout="centered")
+
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+HOUSE_PRICE_FILE = DATA_DIR / "house_prices.csv"
+PUBLIC_PRICE_FILE = DATA_DIR / "public_prices.csv"
+LOG_FILE = DATA_DIR / "charging_log.csv"
+CONFIG_FILE = DATA_DIR / "config.csv"
+SESSION_FILE = DATA_DIR / "open_session.csv"
+
+if "last_home_cost" not in st.session_state:
+    st.session_state.last_home_cost = None
+
+# ---------- Utils ----------
+
+def load_or_create(file, cols):
+    if file.exists():
+        return pd.read_csv(file, parse_dates=False)
+    df = pd.DataFrame(columns=cols)
+    df.to_csv(file, index=False)
+    return df
+
+def load_config():
+    if CONFIG_FILE.exists():
+        return pd.read_csv(CONFIG_FILE)
+    df = pd.DataFrame([{"BatteryCapacity_kWh": 0}])
+    df.to_csv(CONFIG_FILE, index=False)
+    return df
+
+
+def parse_time(t):
+    if pd.isna(t):
+        return time(0, 0)
+
+    if isinstance(t, (float, int)) and not pd.isna(t):
+        hours = int(t)
+        minutes = int((t - hours) * 60)
+        return time(hours, minutes)
+
+    if isinstance(t, str):
+        try:
+            return datetime.strptime(t, "%H:%M:%S").time()
+        except:
+            return datetime.strptime(t, "%H:%M").time()
+
+    return time(0, 0)
+
+
+
+def get_weighted_price(row, start_dt, end_dt):
+    start = parse_time(row["Start Time"])
+    end = parse_time(row["End Time"])
+
+    price_a = float(row["Price A"])
+    price_b = float(row["Price B"])
+    add_p = float(row["Additional Price"])
+
+    total_cost = 0
+    total_hours = 0
+    current = start_dt
+
+    while current < end_dt:
+        nxt = min(current + pd.Timedelta(minutes=1), end_dt)
+        cur_time = current.time()
+
+        if start <= end:
+            in_range = start <= cur_time <= end
+        else:
+            in_range = cur_time >= start or cur_time <= end
+
+        price = price_a if in_range else price_b
+        total_cost += price * ((nxt - current).total_seconds() / 3600)
+        total_hours += (nxt - current).total_seconds() / 3600
+        current = nxt
+
+    return round((total_cost / total_hours) + add_p, 4)
+
+def load_session():
+    if SESSION_FILE.exists():
+        df = pd.read_csv(SESSION_FILE)
+        if len(df) > 0:
+            return df.iloc[0]
+    return None
+
+def save_session(data):
+    pd.DataFrame([data]).to_csv(SESSION_FILE, index=False)
+
+def clear_session():
+    if SESSION_FILE.exists():
+        SESSION_FILE.unlink()
+
+# ---------- Load tables ----------
+
+house_prices = load_or_create(
+    HOUSE_PRICE_FILE,
+    ["Start Time", "End Time", "Price A", "Price B", "Additional Price"]
+)
+
+# @st.cache_data
+def load_public_prices():
+    return load_or_create(
+        PUBLIC_PRICE_FILE,
+        ["Company", "Start Time", "End Time", "Price A", "Price B", "Additional Price"]
+    )
+
+public_prices = load_public_prices()
+
+
+LOG_COLUMNS = [
+    "Timestamp Start",
+    "Timestamp End",
+    "Duration Hours",
+    "Location",
+    "Company",
+    "Battery Start %",
+    "Battery End %",
+    "kWh",
+    "Price per kWh",
+    "Total Cost"
+]
+
+log_df = load_or_create(LOG_FILE, LOG_COLUMNS)
+
+
+
+config = load_config()
+battery_capacity = float(config.iloc[0]["BatteryCapacity_kWh"])
+
+
+# ---------- UI ----------
+
+st.title("🔌 Charging Log")
+tab_log, tab_history, tab_admin = st.tabs([
+    "📝 Log Charging",
+    "📊 History",
+    "⚙️ Configure Prices"
+])
+
+
+with tab_log:
+
+    if st.session_state.last_home_cost is not None:
+        st.success(f"🏠 Last home charging cost: £{st.session_state.last_home_cost:.2f}")
+
+    session = load_session()
+
+    if session is None:
+        use_now = st.checkbox("Use current date and time", value=True)
+
+        if use_now:
+            start_ts = datetime.now()
+        else:
+            d = st.date_input("Start Date")
+            st.subheader("Start Time")
+            c1, c2 = st.columns(2)
+            with c1:
+                start_hour = st.selectbox(
+                    "Hour",
+                    list(range(0, 24)),
+                    format_func=lambda x: f"{x:02d}",
+                    key="start_hour"
+                )
+
+            with c2:
+                start_minute = st.selectbox(
+                    "Minute",
+                    list(range(0, 60)),
+                    format_func=lambda x: f"{x:02d}",
+                    key="start_min"
+                )
+
+            start_time = time(start_hour, start_minute)
+            start_ts = datetime.combine(d, start_time)
+            
+    else:
+        start_ts = pd.to_datetime(session["Timestamp Start"])
+
+
+    if session is None:
+        mode = "start"
+        st.success("🟢 No open session — start a new charging session")
+    else:
+        mode = "end"
+        st.warning(f"🟡 Open session since {session['Timestamp Start']}")
+
+    if session is None:
+        location = st.selectbox("Location", ["Home", "Public"])
+    else:
+        location = session["Location"]
+        st.info(f"Location: {location}")
+
+
+    kwh = 0
+    bat_start = 0
+    bat_end = 0
+
+    company = ""
+    battery = ""
+
+    price_per_kwh = 0
+
+
+
+if mode == "start":
+
+    # start_ts has already been defined above
+
+    if location == "Home":
+        company = ""
+
+    if location == "Public":
+        companies = sorted(public_prices["Company"].dropna().unique().tolist())
+        companies = ["➕ New Company"] + companies
+        selected = st.selectbox("Company", companies)
+
+        if selected == "➕ New Company":
+            company = st.text_input("New Company")
+        else:
+            company = selected
+
+    bat_start = st.number_input("Battery at start (%)", 0, 100)
+
+    if location == "Public" and company.strip() == "":
+        st.error("Please enter the company.")
+        st.stop()
+
+    if st.button("Start Charging"):
+        save_session({
+            "Timestamp Start": start_ts,
+            "Location": location,
+            "Company": company,
+            "Battery Start %": bat_start
+        })
+        st.success("Session started!")
+        st.rerun()
+
+if mode == "end":
+
+    company = session["Company"]
+    st.info(f"Company: {company}")
+    st.caption("Session in progress — company locked")
+    bat_end = st.number_input("Battery at end (%)", 0, 100)
+    st.subheader("End Time")
+    c1, c2 = st.columns(2)
+    with c1:
+        end_hour = st.selectbox(
+            "Hour",
+            list(range(0, 24)),
+            format_func=lambda x: f"{x:02d}",
+            key="end_hour"
+        )
+
+    with c2:
+        end_minute = st.selectbox(
+            "Minute",
+            list(range(0, 60)),
+            format_func=lambda x: f"{x:02d}",
+            key="end_min"
+        )
+
+    end_time = time(end_hour, end_minute)
+
+    start_ts = pd.to_datetime(session["Timestamp Start"])
+    end_ts = datetime.combine(start_ts.date(), end_time)
+    if end_ts <= start_ts:
+        end_ts += pd.Timedelta(days=1)  # assume charging passed midnight
+
+    charge_speed = st.number_input("Estimated charging speed (kW - optional)", step=0.001)
+ 
+    # Only on public charging, optional
+    total_manual = None
+    if session["Location"] == "Public":
+        total_manual = st.number_input("Total Price (optional)", step=0.01)
+
+    duration_hours = round((end_ts - start_ts).total_seconds() / 3600, 2)
+    st.info(f"⏱ Duration: {duration_hours} h")
+
+    # Auto Estimating
+    battery_delta = bat_end - float(session["Battery Start %"])
+    kwh_from_battery = round((battery_delta / 100) * battery_capacity, 2) if battery_delta > 0 else 0
+    kwh_from_speed = round(charge_speed * duration_hours, 2) if charge_speed > 0 else 0
+
+    # Smart suggestion
+    suggested_kwh = kwh_from_speed if charge_speed > 0 else kwh_from_battery
+
+    kwh_manual = st.number_input(
+        "kWh (optional)",
+        value=float(suggested_kwh) if suggested_kwh > 0 else 0.0,
+        step=0.001
+    )
+
+
+    if st.button("Finish Charging"):
+
+        if kwh_manual > 0:
+            kwh = round(kwh_manual, 2)
+        else:
+            delta = bat_end - float(session["Battery Start %"])
+
+            if not (0 <= bat_end <= 100):
+                st.error("Bateria final deve estar entre 0 e 100%.")
+                st.stop()
+
+            if delta <= 0:
+                st.error("Bateria final deve ser maior que a inicial.")
+                st.stop()
+
+            kwh = round((delta / 100) * battery_capacity, 2)
+
+
+        if session["Location"] == "Home":
+            if len(house_prices) == 0:
+                st.error("Please configure the home price first.")
+                st.stop()
+            row = house_prices.iloc[0]
+
+        else:
+            match = public_prices[public_prices["Company"] == session["Company"]]
+
+            if len(match) == 0:
+                st.error("Company price not found.")
+                st.stop()
+
+            row = match.iloc[0]
+
+        # If manual price entered, recalculate price per kWh
+        if total_manual is not None and total_manual > 0:
+            total = total_manual
+            price = round(total / kwh, 4)
+        else:
+            price = get_weighted_price(row, start_ts, end_ts)
+            total = round(price * kwh, 2)
+
+        # Show charging cost, if charging at home
+        if session["Location"] == "Home":
+            st.session_state.last_home_cost = total
+        else:
+            st.session_state.last_home_cost = None
+
+
+        new_row = pd.DataFrame([{
+            "Timestamp Start": start_ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "Timestamp End": end_ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "Duration Hours": duration_hours,
+            "Location": session["Location"],
+            "Company": session["Company"],
+            "Battery Start %": session["Battery Start %"],
+            "Battery End %": bat_end,
+            "kWh": kwh,
+            "Price per kWh": price,
+            "Total Cost": total
+        }])
+
+
+        log_df = pd.concat([log_df, new_row], ignore_index=True)[LOG_COLUMNS]
+        log_df.to_csv(LOG_FILE, index=False)
+
+        clear_session()
+        st.success("Charging finished!")
+        st.rerun()
+
+with tab_history:
+
+    st.subheader("📊 Charging History")
+
+    if LOG_FILE.exists():
+        history_df = pd.read_csv(LOG_FILE)
+
+        if len(history_df) == 0:
+            st.info("No charging sessions recorded yet.")
+        else:
+            history_df["Timestamp Start"] = pd.to_datetime(history_df["Timestamp Start"], format="%Y-%m-%d %H:%M:%S")
+            history_df["Timestamp End"] = pd.to_datetime(history_df["Timestamp End"], format="%Y-%m-%d %H:%M:%S")
+
+
+            history_df = history_df.sort_values("Timestamp Start", ascending=False)
+
+            st.dataframe(history_df, use_container_width=True)
+    else:
+        st.info("No charging sessions recorded yet.")
+
+
+
+
+# ---------- Admin ----------
+
+with tab_admin:
+
+    with st.expander("🔧 Vehicle Parameters"):
+        cap = st.number_input("Total battery capacity (kWh)", step=1.0, value=battery_capacity)
+
+        if st.button("Save Parameters"):
+            pd.DataFrame([{"BatteryCapacity_kWh": cap}]).to_csv(CONFIG_FILE, index=False)
+            st.success("Parameters saved!")
+            st.rerun()
+
+    with st.expander("⚙️ Set Prices"):
+
+        st.subheader("🏠 Home Price")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            h_start = st.time_input("Start Time (Home)", value=time(0,0))
+            h_end   = st.time_input("End Time (Home)", value=time(23,59))
+        with c2:
+            h_a = st.number_input("Price A (Home)", step=0.001)
+            h_b = st.number_input("Price B (Home)", step=0.001)
+            h_add = st.number_input("Additional Price (Home)", step=0.001)
+
+        if st.button("Save Home Price"):
+            house_prices = pd.DataFrame([{
+                "Start Time": h_start.strftime("%H:%M:%S"),
+                "End Time": h_end.strftime("%H:%M:%S"),
+                "Price A": h_a,
+                "Price B": h_b,
+                "Additional Price": h_add
+            }])
+            house_prices.to_csv(HOUSE_PRICE_FILE, index=False)
+            st.success("Home price saved!")
+
+
+        st.divider()
+        st.subheader("🌍 Public Price")
+
+        company = st.text_input("Company", key="price_company")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            p_start = st.time_input("Start Time (Public)", value=time(0,0), key="ps")
+            p_end   = st.time_input("End Time (Public)", value=time(23,59), key="pe")
+        with c2:
+            p_a = st.number_input("Price A (Public)", step=0.001, key="pa")
+            p_b = st.number_input("Price B (Public)", step=0.001, key="pb")
+            p_add = st.number_input("Additional Price (Public)", step=0.001, key="padd")
+
+        if st.button("Save Public Price"):
+            new_row = pd.DataFrame([{
+                "Company": company,
+                "Start Time": p_start.strftime("%H:%M:%S"),
+                "End Time": p_end.strftime("%H:%M:%S"),
+                "Price A": p_a,
+                "Price B": p_b,
+                "Additional Price": p_add
+            }])
+            if company not in public_prices["Company"].values:
+                public_prices = pd.concat([public_prices, new_row], ignore_index=True)
+            public_prices.to_csv(PUBLIC_PRICE_FILE, index=False)
+            st.success("Public price saved!")
+            st.cache_data.clear()
+
+
+
+
