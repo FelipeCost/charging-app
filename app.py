@@ -3,17 +3,23 @@ import pandas as pd
 from datetime import datetime, time
 from pathlib import Path
 import os
+from s3_utils import read_csv_s3, write_csv_s3
+import io
+from botocore.exceptions import ClientError
+import boto3
+
 
 st.set_page_config(page_title="Charging Log", layout="centered")
 
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
+LOG_FILE = "log.csv"
+HOUSE_PRICE_FILE = "house_prices.csv"
+PUBLIC_PRICE_FILE = "public_prices.csv"
+CONFIG_FILE = "config.csv"
+SESSION_FILE = "open_session.csv"
+S3_BUCKET = os.environ.get("S3_BUCKET")
+AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
-HOUSE_PRICE_FILE = DATA_DIR / "house_prices.csv"
-PUBLIC_PRICE_FILE = DATA_DIR / "public_prices.csv"
-LOG_FILE = DATA_DIR / "charging_log.csv"
-CONFIG_FILE = DATA_DIR / "config.csv"
-SESSION_FILE = DATA_DIR / "open_session.csv"
+
 
 if "last_home_cost" not in st.session_state:
     st.session_state.last_home_cost = None
@@ -21,18 +27,18 @@ if "last_home_cost" not in st.session_state:
 # ---------- Utils ----------
 
 def load_or_create(file, cols):
-    if file.exists():
-        return pd.read_csv(file, parse_dates=False)
-    df = pd.DataFrame(columns=cols)
-    df.to_csv(file, index=False)
+    df = read_csv_s3(file, cols)
+    if len(df) == 0:
+        write_csv_s3(df, file)
     return df
 
 def load_config():
-    if CONFIG_FILE.exists():
-        return pd.read_csv(CONFIG_FILE)
-    df = pd.DataFrame([{"BatteryCapacity_kWh": 0}])
-    df.to_csv(CONFIG_FILE, index=False)
+    df = read_csv_s3(CONFIG_FILE, ["BatteryCapacity_kWh"])
+    if len(df) == 0:
+        df = pd.DataFrame([{"BatteryCapacity_kWh": 0}])
+        write_csv_s3(df, CONFIG_FILE)
     return df
+
 
 
 def parse_time(t):
@@ -83,18 +89,22 @@ def get_weighted_price(row, start_dt, end_dt):
     return round((total_cost / total_hours) + add_p, 4)
 
 def load_session():
-    if SESSION_FILE.exists():
-        df = pd.read_csv(SESSION_FILE)
-        if len(df) > 0:
-            return df.iloc[0]
+    df = read_csv_s3(SESSION_FILE)
+    if len(df) > 0:
+        return df.iloc[0]
     return None
 
 def save_session(data):
-    pd.DataFrame([data]).to_csv(SESSION_FILE, index=False)
+    write_csv_s3(pd.DataFrame([data]), SESSION_FILE)
 
 def clear_session():
-    if SESSION_FILE.exists():
-        SESSION_FILE.unlink()
+    write_csv_s3(pd.DataFrame(), SESSION_FILE)
+
+def fetch_csv_from_s3(key):
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+    return obj["Body"].read()
+
 
 # ---------- Load tables ----------
 
@@ -126,9 +136,8 @@ LOG_COLUMNS = [
     "Total Cost"
 ]
 
+
 log_df = load_or_create(LOG_FILE, LOG_COLUMNS)
-
-
 
 config = load_config()
 battery_capacity = float(config.iloc[0]["BatteryCapacity_kWh"])
@@ -360,7 +369,7 @@ if mode == "end":
 
 
         log_df = pd.concat([log_df, new_row], ignore_index=True)[LOG_COLUMNS]
-        log_df.to_csv(LOG_FILE, index=False)
+        write_csv_s3(log_df, LOG_FILE)
 
         clear_session()
         st.success("Charging finished!")
@@ -370,21 +379,19 @@ with tab_history:
 
     st.subheader("📊 Charging History")
 
-    if LOG_FILE.exists():
-        history_df = pd.read_csv(LOG_FILE)
+    history_df = read_csv_s3(LOG_FILE)
 
-        if len(history_df) == 0:
-            st.info("No charging sessions recorded yet.")
-        else:
-            history_df["Timestamp Start"] = pd.to_datetime(history_df["Timestamp Start"], format="%Y-%m-%d %H:%M:%S")
-            history_df["Timestamp End"] = pd.to_datetime(history_df["Timestamp End"], format="%Y-%m-%d %H:%M:%S")
-
-
-            history_df = history_df.sort_values("Timestamp Start", ascending=False)
-
-            st.dataframe(history_df, use_container_width=True)
-    else:
+    if len(history_df) == 0:
         st.info("No charging sessions recorded yet.")
+    else:
+        history_df["Timestamp Start"] = pd.to_datetime(history_df["Timestamp Start"], format="mixed", errors="coerce")
+        history_df["Timestamp End"] = pd.to_datetime(history_df["Timestamp End"], format="mixed", errors="coerce")
+
+
+        history_df = history_df.sort_values("Timestamp Start", ascending=False)
+
+        st.dataframe(history_df, use_container_width=True)
+
 
 
 
@@ -397,7 +404,7 @@ with tab_admin:
         cap = st.number_input("Total battery capacity (kWh)", step=1.0, value=battery_capacity)
 
         if st.button("Save Parameters"):
-            pd.DataFrame([{"BatteryCapacity_kWh": cap}]).to_csv(CONFIG_FILE, index=False)
+            write_csv_s3(pd.DataFrame([{"BatteryCapacity_kWh": cap}]), CONFIG_FILE)
             st.success("Parameters saved!")
             st.rerun()
 
@@ -422,7 +429,7 @@ with tab_admin:
                 "Price B": h_b,
                 "Additional Price": h_add
             }])
-            house_prices.to_csv(HOUSE_PRICE_FILE, index=False)
+            write_csv_s3(house_prices, HOUSE_PRICE_FILE)
             st.success("Home price saved!")
 
 
@@ -451,7 +458,7 @@ with tab_admin:
             }])
             if company not in public_prices["Company"].values:
                 public_prices = pd.concat([public_prices, new_row], ignore_index=True)
-            public_prices.to_csv(PUBLIC_PRICE_FILE, index=False)
+            write_csv_s3(public_prices, PUBLIC_PRICE_FILE)
             st.success("Public price saved!")
             st.cache_data.clear()
 
