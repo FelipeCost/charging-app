@@ -30,12 +30,15 @@ def fetch_csv_from_s3(key):
 params = st.query_params
 
 if params.get("export") == "log":
+    df = read_csv_s3(LOG_FILE)
+    csv = df.to_csv(index=False)
 
-    csv_bytes = fetch_csv_from_s3(LOG_FILE)
+    sys.stdout.write(csv)
+    sys.stdout.flush()
 
-    # Envia CSV cru, sem Streamlit UI
-    sys.stdout.write(csv_bytes.decode("utf-8"))
+    mimetypes.add_type("text/csv", ".csv")
     sys.exit(0)
+
 
 
 if "last_home_cost" not in st.session_state:
