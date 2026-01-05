@@ -7,6 +7,9 @@ from s3_utils import read_csv_s3, write_csv_s3
 import io
 from botocore.exceptions import ClientError
 import boto3
+import sys
+import mimetypes
+
 
 
 LOG_FILE = "charging_log.csv"
@@ -25,15 +28,14 @@ def fetch_csv_from_s3(key):
     return obj["Body"].read()
 
 params = st.query_params
-if "export" in params and params["export"] == "log":
+
+if params.get("export") == "log":
+
     csv_bytes = fetch_csv_from_s3(LOG_FILE)
-    st.download_button(
-        label="Download",
-        data=csv_bytes,
-        file_name="charging_log.csv",
-        mime="text/csv"
-    )
-    st.stop()
+
+    # Envia CSV cru, sem Streamlit UI
+    sys.stdout.write(csv_bytes.decode("utf-8"))
+    sys.exit(0)
 
 
 if "last_home_cost" not in st.session_state:
