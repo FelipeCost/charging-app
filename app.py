@@ -11,7 +11,7 @@ import boto3
 
 st.set_page_config(page_title="Charging Log", layout="centered")
 
-LOG_FILE = "log.csv"
+LOG_FILE = "charging_log.csv"
 HOUSE_PRICE_FILE = "house_prices.csv"
 PUBLIC_PRICE_FILE = "public_prices.csv"
 CONFIG_FILE = "config.csv"
