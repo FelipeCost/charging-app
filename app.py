@@ -19,7 +19,7 @@ S3_BUCKET = os.environ.get("S3_BUCKET")
 AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
 st.set_page_config(page_title="Charging Log", layout="centered")
-inject_csv_endpoint()
+
 
 
 def fetch_csv_from_s3(key):
