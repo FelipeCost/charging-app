@@ -9,8 +9,6 @@ from botocore.exceptions import ClientError
 import boto3
 
 
-st.set_page_config(page_title="Charging Log", layout="centered")
-
 LOG_FILE = "charging_log.csv"
 HOUSE_PRICE_FILE = "house_prices.csv"
 PUBLIC_PRICE_FILE = "public_prices.csv"
@@ -19,6 +17,23 @@ SESSION_FILE = "open_session.csv"
 S3_BUCKET = os.environ.get("S3_BUCKET")
 AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
+st.set_page_config(page_title="Charging Log", layout="centered")
+
+def fetch_csv_from_s3(key):
+    s3 = boto3.client("s3")
+    obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+    return obj["Body"].read()
+
+params = st.query_params
+if "export" in params and params["export"] == "log":
+    csv_bytes = fetch_csv_from_s3(LOG_FILE)
+    st.download_button(
+        label="Download",
+        data=csv_bytes,
+        file_name="charging_log.csv",
+        mime="text/csv"
+    )
+    st.stop()
 
 
 if "last_home_cost" not in st.session_state:
@@ -100,10 +115,7 @@ def save_session(data):
 def clear_session():
     write_csv_s3(pd.DataFrame(), SESSION_FILE)
 
-def fetch_csv_from_s3(key):
-    s3 = boto3.client("s3")
-    obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
-    return obj["Body"].read()
+
 
 
 # ---------- Load tables ----------
@@ -151,6 +163,8 @@ tab_log, tab_history, tab_admin = st.tabs([
     "📊 History",
     "⚙️ Configure Prices"
 ])
+
+
 
 
 with tab_log:
