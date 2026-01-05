@@ -9,6 +9,30 @@ from botocore.exceptions import ClientError
 import boto3
 import sys
 import mimetypes
+from streamlit.web.server.websocket_headers import _get_websocket_headers
+from streamlit.web.server.server_util import make_url_path_regex
+from tornado.web import RequestHandler
+from streamlit.web.server.server import Server
+
+class CSVExportHandler(RequestHandler):
+    def get(self):
+        if self.get_argument("export", "") == "log":
+            df = read_csv_s3(LOG_FILE)
+            csv = df.to_csv(index=False)
+
+            self.set_header("Content-Type", "text/csv")
+            self.set_header("Content-Disposition", "attachment; filename=charging_log.csv")
+            self.write(csv)
+        else:
+            self.set_status(404)
+
+def inject_csv_endpoint():
+    server = Server.get_current()
+    if not hasattr(server, "_csv_export_injected"):
+        server._csv_export_injected = True
+        server._tornado_app.add_handlers(r".*", [
+            (make_url_path_regex(r"/"), CSVExportHandler),
+        ])
 
 
 
@@ -21,6 +45,8 @@ S3_BUCKET = os.environ.get("S3_BUCKET")
 AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
 st.set_page_config(page_title="Charging Log", layout="centered")
+inject_csv_endpoint()
+
 
 def fetch_csv_from_s3(key):
     s3 = boto3.client("s3")
@@ -29,15 +55,15 @@ def fetch_csv_from_s3(key):
 
 params = st.query_params
 
-if params.get("export") == "log":
-    df = read_csv_s3(LOG_FILE)
-    csv = df.to_csv(index=False)
+# if params.get("export") == "log":
+#     df = read_csv_s3(LOG_FILE)
+#     csv = df.to_csv(index=False)
 
-    sys.stdout.write(csv)
-    sys.stdout.flush()
+#     sys.stdout.write(csv)
+#     sys.stdout.flush()
 
-    mimetypes.add_type("text/csv", ".csv")
-    sys.exit(0)
+#     mimetypes.add_type("text/csv", ".csv")
+#     sys.exit(0)
 
 
 
@@ -118,7 +144,13 @@ def save_session(data):
     write_csv_s3(pd.DataFrame([data]), SESSION_FILE)
 
 def clear_session():
-    write_csv_s3(pd.DataFrame(), SESSION_FILE)
+    write_csv_s3(pd.DataFrame(columns=[
+        "Timestamp Start",
+        "Location",
+        "Company",
+        "Battery Start %"
+    ]), SESSION_FILE)
+
 
 
 
