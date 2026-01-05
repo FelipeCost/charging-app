@@ -7,32 +7,6 @@ from s3_utils import read_csv_s3, write_csv_s3
 import io
 from botocore.exceptions import ClientError
 import boto3
-import sys
-import mimetypes
-from streamlit.web.server.websocket_headers import _get_websocket_headers
-from streamlit.web.server.server_util import make_url_path_regex
-from tornado.web import RequestHandler
-from streamlit.web.server.server import Server
-
-class CSVExportHandler(RequestHandler):
-    def get(self):
-        if self.get_argument("export", "") == "log":
-            df = read_csv_s3(LOG_FILE)
-            csv = df.to_csv(index=False)
-
-            self.set_header("Content-Type", "text/csv")
-            self.set_header("Content-Disposition", "attachment; filename=charging_log.csv")
-            self.write(csv)
-        else:
-            self.set_status(404)
-
-def inject_csv_endpoint():
-    server = Server.get_current()
-    if not hasattr(server, "_csv_export_injected"):
-        server._csv_export_injected = True
-        server._tornado_app.add_handlers(r".*", [
-            (make_url_path_regex(r"/"), CSVExportHandler),
-        ])
 
 
 
