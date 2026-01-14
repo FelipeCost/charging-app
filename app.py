@@ -20,7 +20,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
 st.set_page_config(page_title="Charging Log", layout="centered")
 
-full_range = 246 #st.number_input("Estimated full range at 100% (miles)", min_value=1)
+# = 246 #st.number_input("Estimated full range at 100% (miles)", min_value=1)
 
 def fetch_csv_from_s3(key):
     s3 = boto3.client("s3")
@@ -160,6 +160,7 @@ for col in ["Range Start", "Range End"]:
 
 config = load_config()
 battery_capacity = float(config.iloc[0]["BatteryCapacity_kWh"])
+full_range = float(config.iloc[0]["FullRange"])
 
 
 # ---------- UI ----------
