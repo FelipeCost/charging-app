@@ -29,18 +29,6 @@ def fetch_csv_from_s3(key):
 
 params = st.query_params
 
-# if params.get("export") == "log":
-#     df = read_csv_s3(LOG_FILE)
-#     csv = df.to_csv(index=False)
-
-#     sys.stdout.write(csv)
-#     sys.stdout.flush()
-
-#     mimetypes.add_type("text/csv", ".csv")
-#     sys.exit(0)
-
-
-
 if "last_home_cost" not in st.session_state:
     st.session_state.last_home_cost = None
 
@@ -154,13 +142,21 @@ LOG_COLUMNS = [
     "Company",
     "Battery Start %",
     "Battery End %",
+    "Range Start",    # NEW
+    "Range End",      # NEW
     "kWh",
     "Price per kWh",
     "Total Cost"
 ]
 
 
+
 log_df = load_or_create(LOG_FILE, LOG_COLUMNS)
+# preencher NaN se colunas novas não existirem
+for col in ["Range Start", "Range End"]:
+    if col not in log_df.columns:
+        log_df[col] = None
+
 
 config = load_config()
 battery_capacity = float(config.iloc[0]["BatteryCapacity_kWh"])
@@ -267,11 +263,13 @@ with tab_log:
 
     if st.button("Start Charging"):
         save_session({
-            "Timestamp Start": start_ts,
-            "Location": location,
-            "Company": company,
-            "Battery Start %": bat_start
-        })
+                    "Timestamp Start": start_ts,
+                    "Location": location,
+                    "Company": company,
+                    "Battery Start %": bat_start,
+                    "Range Start": range_start   # NEW
+                    })
+
         st.success("Session started!")
         st.rerun()
 
@@ -348,13 +346,13 @@ if mode == "end":
         else:
             delta = bat_end - float(session["Battery Start %"])
 
-            if not (0 <= bat_end <= 100):
-                st.error("Final battery must be between 0 and 100%.")
-                st.stop()
+            # if not (0 <= bat_end <= 100):
+            #     st.error("Final battery must be between 0 and 100%.")
+            #     st.stop()
 
-            if delta <= 0:
-                st.error("Final battery must be greater than the initial.")
-                st.stop()
+            # if delta <= 0:
+            #     st.error("Final battery must be greater than the initial.")
+            #     st.stop()
 
             kwh = round((delta / 100) * battery_capacity, 2)
 
@@ -391,17 +389,20 @@ if mode == "end":
 
 
         new_row = pd.DataFrame([{
-            "Timestamp Start": start_ts.strftime("%Y-%m-%d %H:%M:%S"),
-            "Timestamp End": end_ts.strftime("%Y-%m-%d %H:%M:%S"),
-            "Duration Hours": duration_hours,
-            "Location": session["Location"],
-            "Company": session["Company"],
-            "Battery Start %": session["Battery Start %"],
-            "Battery End %": bat_end,
-            "kWh": kwh,
-            "Price per kWh": price,
-            "Total Cost": total
-        }])
+                                "Timestamp Start": start_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                "Timestamp End": end_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                "Duration Hours": duration_hours,
+                                "Location": session["Location"],
+                                "Company": session["Company"],
+                                "Battery Start %": session["Battery Start %"],
+                                "Battery End %": bat_end,
+                                "Range Start": session.get("Range Start", None),  # NEW
+                                "Range End": range_end,                           # NEW
+                                "kWh": kwh,
+                                "Price per kWh": price,
+                                "Total Cost": total
+                            }])
+
 
 
         log_df = pd.concat([log_df, new_row], ignore_index=True)[LOG_COLUMNS]
