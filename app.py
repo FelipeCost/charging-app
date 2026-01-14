@@ -20,7 +20,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
 st.set_page_config(page_title="Charging Log", layout="centered")
 
-
+full_range = 246 #st.number_input("Estimated full range at 100% (miles)", min_value=1)
 
 def fetch_csv_from_s3(key):
     s3 = boto3.client("s3")
@@ -242,24 +242,24 @@ with tab_log:
 
 
 
-if mode == "start":
+    if mode == "start":
 
     # start_ts has already been defined above
 
-    if location == "Home":
-        company = ""
+        if location == "Home":
+            company = ""
 
-    if location == "Public":
-        companies = sorted(public_prices["Company"].dropna().unique().tolist())
-        companies = ["➕ New Company"] + companies
-        selected = st.selectbox("Company", companies)
+        if location == "Public":
+            companies = sorted(public_prices["Company"].dropna().unique().tolist())
+            companies = ["➕ New Company"] + companies
+            selected = st.selectbox("Company", companies)
 
-        if selected == "➕ New Company":
-            company = st.text_input("New Company")
-        else:
-            company = selected
+            if selected == "➕ New Company":
+                company = st.text_input("New Company")
+            else:
+                company = selected
 
-    bat_start = st.number_input("Battery at start (%)", 0, 100)
+    range_start = st.number_input("Estimated range at start (miles)", min_value=0)
 
     if location == "Public" and company.strip() == "":
         st.error("Please enter the company.")
@@ -280,7 +280,7 @@ if mode == "end":
     company = session["Company"]
     st.info(f"Company: {company}")
     st.caption("Session in progress — company locked")
-    bat_end = st.number_input("Battery at end (%)", 0, 100)
+    range_end = st.number_input("Estimated range at end (miles)", min_value=0)
     st.subheader("End Time")
     c1, c2 = st.columns(2)
     with c1:
@@ -333,20 +333,31 @@ if mode == "end":
 
     if st.button("Finish Charging"):
 
+        # ---------- kWh calculation priority ----------
+
         if kwh_manual > 0:
             kwh = round(kwh_manual, 2)
+
+        # Use range based calculation if available
+        elif range_end > range_start and full_range > 0:
+            range_delta = range_end - range_start
+            perc_gained = range_delta / full_range
+            kwh = round(perc_gained * battery_capacity, 2)
+
+        # Fallback to battery %
         else:
             delta = bat_end - float(session["Battery Start %"])
 
             if not (0 <= bat_end <= 100):
-                st.error("Bateria final deve estar entre 0 e 100%.")
+                st.error("Final battery must be between 0 and 100%.")
                 st.stop()
 
             if delta <= 0:
-                st.error("Bateria final deve ser maior que a inicial.")
+                st.error("Final battery must be greater than the initial.")
                 st.stop()
 
             kwh = round((delta / 100) * battery_capacity, 2)
+
 
 
         if session["Location"] == "Home":
@@ -402,23 +413,34 @@ if mode == "end":
 
 with tab_history:
 
-    st.subheader("📊 Charging History")
+    st.subheader("📊 Charging History (Editable)")
 
     history_df = read_csv_s3(LOG_FILE)
 
     if len(history_df) == 0:
         st.info("No charging sessions recorded yet.")
-    else:
-        history_df["Timestamp Start"] = pd.to_datetime(history_df["Timestamp Start"], format="mixed", errors="coerce")
-        history_df["Timestamp End"] = pd.to_datetime(history_df["Timestamp End"], format="mixed", errors="coerce")
+        st.stop()
 
+    history_df["Timestamp Start"] = pd.to_datetime(history_df["Timestamp Start"], errors="coerce")
+    history_df["Timestamp End"]   = pd.to_datetime(history_df["Timestamp End"], errors="coerce")
 
-        history_df = history_df.sort_values("Timestamp Start", ascending=False)
+    history_df = history_df.sort_values("Timestamp Start", ascending=False)
 
-        st.dataframe(history_df, use_container_width=True)
+    edited_df = st.data_editor(
+        history_df,
+        num_rows="dynamic",
+        use_container_width=True
+    )
 
+    st.caption("Edit any field directly in the table above and click Save to persist changes.")
 
+    if st.button("💾 Save changes"):
+        edited_df["Timestamp Start"] = edited_df["Timestamp Start"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        edited_df["Timestamp End"]   = edited_df["Timestamp End"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
+        write_csv_s3(edited_df, LOG_FILE)
+        st.success("History updated successfully.")
+        st.rerun()
 
 
 # ---------- Admin ----------
