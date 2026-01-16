@@ -53,13 +53,11 @@ st.set_page_config(page_title="Charging Log", layout="centered")
 check_password()
 
 st.sidebar.success("Authenticated")
-if st.sidebar.button("Logout"):
-    st.session_state.authenticated = False
-    st.rerun()
 
-if st.sidebar.button("Logout"):
+if st.sidebar.button("Logout", key="logout_btn"):
     st.session_state.clear()
     st.rerun()
+
 
 
 def fetch_csv_from_s3(key):
