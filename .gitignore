@@ -4,3 +4,4 @@ __pycache__/
 data/
 *.csv
 venv/
+charging-app.env

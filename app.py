@@ -7,8 +7,7 @@ from s3_utils import read_csv_s3, write_csv_s3
 import io
 from botocore.exceptions import ClientError
 import boto3
-
-
+from auth_utils import load_password
 
 LOG_FILE = "charging_log.csv"
 HOUSE_PRICE_FILE = "house_prices.csv"
@@ -18,9 +17,50 @@ SESSION_FILE = "open_session.csv"
 S3_BUCKET = os.environ.get("S3_BUCKET")
 AWS_REGION = os.environ.get("AWS_REGION", "eu-west-2")
 
+
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    current_password = load_password()
+
+    if current_password is None:
+        st.error("Auth not configured")
+        st.stop()
+
+    if st.session_state.authenticated:
+        return
+
+    st.title("🔐 Private Access")
+
+    pwd = st.text_input("Enter password", type="password")
+
+    if st.button("Login"):
+        if pwd == current_password:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password")
+
+    st.stop()
+
+
+
+
+
 st.set_page_config(page_title="Charging Log", layout="centered")
 
-# = 246 #st.number_input("Estimated full range at 100% (miles)", min_value=1)
+check_password()
+
+st.sidebar.success("Authenticated")
+if st.sidebar.button("Logout"):
+    st.session_state.authenticated = False
+    st.rerun()
+
+if st.sidebar.button("Logout"):
+    st.session_state.clear()
+    st.rerun()
+
 
 def fetch_csv_from_s3(key):
     s3 = boto3.client("s3")
