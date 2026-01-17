@@ -148,8 +148,10 @@ def clear_session():
         "Timestamp Start",
         "Location",
         "Company",
-        "Battery Start %"
+        "Battery Start %",
+        "Range Start"
     ]), SESSION_FILE)
+
 
 
 
@@ -294,29 +296,32 @@ with tab_log:
             else:
                 company = selected
 
-    range_start = st.number_input("Estimated range at start (miles)", min_value=0)
+        bat_start = st.number_input("Battery Start (%)", min_value=0, max_value=100)
+        range_start = st.number_input("Estimated range at start (miles)", min_value=0)
 
-    if location == "Public" and company.strip() == "":
-        st.error("Please enter the company.")
-        st.stop()
+        if location == "Public" and company.strip() == "":
+            st.error("Please enter the company.")
+            st.stop()
 
-    if st.button("Start Charging"):
-        save_session({
-                    "Timestamp Start": start_ts,
-                    "Location": location,
-                    "Company": company,
-                    "Battery Start %": bat_start,
-                    "Range Start": range_start   # NEW
-                    })
+        if st.button("Start Charging"):
+            save_session({
+                        "Timestamp Start": start_ts,
+                        "Location": location,
+                        "Company": company,
+                        "Battery Start %": bat_start,
+                        "Range Start": range_start   # NEW
+                        })
 
-        st.success("Session started!")
-        st.rerun()
+            st.success("Session started!")
+            st.rerun()
 
 if mode == "end":
 
     company = session["Company"]
     st.info(f"Company: {company}")
     st.caption("Session in progress — company locked")
+    range_start = float(session.get("Range Start", 0))
+    bat_end = st.number_input("Battery end (%)", min_value=0, max_value=100)
     range_end = st.number_input("Estimated range at end (miles)", min_value=0)
     st.subheader("End Time")
     c1, c2 = st.columns(2)
