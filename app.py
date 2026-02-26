@@ -289,7 +289,7 @@ with tab_insights:
     agg = aggregate_costs(
                             df,
                             period,
-                            include_location=(location_filter == "All")
+                            include_location=(location_filter != "All")
                         )
 
 
