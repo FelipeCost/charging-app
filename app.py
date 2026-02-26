@@ -79,11 +79,17 @@ def load_or_create(file, cols):
     return df
 
 def load_config():
-    df = read_csv_s3(CONFIG_FILE, ["BatteryCapacity_kWh"])
+    df = read_csv_s3(CONFIG_FILE, ["BatteryCapacity_kWh", "FullRange"])
+
     if len(df) == 0:
-        df = pd.DataFrame([{"BatteryCapacity_kWh": 0}])
+        df = pd.DataFrame([{
+            "BatteryCapacity_kWh": 0,
+            "FullRange": 0
+        }])
         write_csv_s3(df, CONFIG_FILE)
+
     return df
+
 
 
 
@@ -135,10 +141,15 @@ def get_weighted_price(row, start_dt, end_dt):
     return round((total_cost / total_hours) + add_p, 4)
 
 def load_session():
-    df = read_csv_s3(SESSION_FILE)
-    if len(df) > 0:
-        return df.iloc[0]
-    return None
+    df = read_csv_s3(SESSION_FILE, [
+                                        "Timestamp Start",
+                                        "Location",
+                                        "Company",
+                                        "Battery Start %",
+                                        "Range Start"
+                                    ]
+                    )
+
 
 def save_session(data):
     write_csv_s3(pd.DataFrame([data]), SESSION_FILE)
@@ -215,7 +226,7 @@ def prepare_analytics(df):
 
     return df
 
-def aggregate_costs(df, period):
+def aggregate_costs(df, period, include_location=True):
 
     group_map = {
         "Week": "Week",
@@ -225,8 +236,12 @@ def aggregate_costs(df, period):
 
     col = group_map[period]
 
+    group_cols = [col]
+    if include_location:
+        group_cols.append("Location")
+
     agg = (
-        df.groupby([col, "Location"])
+        df.groupby(group_cols)
           .agg(
               Total_Cost=("Total Cost", "sum"),
               Sessions=("Total Cost", "count"),
@@ -236,9 +251,10 @@ def aggregate_costs(df, period):
     )
 
     agg["Avg_Cost_per_Session"] = agg["Total_Cost"] / agg["Sessions"]
-    agg["Avg_Cost_per_kWh"] = agg["Total_Cost"] / agg["Total_kWh"]
+    agg["Avg_Cost_per_kWh"] = agg["Total_Cost"] / agg["Total_kWh"].replace(0, pd.NA)
 
     return agg.sort_values(col, ascending=False)
+
 
 
 # ---------- UI ----------
@@ -270,7 +286,12 @@ with tab_insights:
     if location_filter != "All":
         df = df[df["Location"] == location_filter]
 
-    agg = aggregate_costs(df, period)
+    agg = aggregate_costs(
+                            df,
+                            period,
+                            include_location=(location_filter == "All")
+                        )
+
 
     st.dataframe(agg, use_container_width=True)
 
@@ -391,7 +412,7 @@ with tab_log:
 
 if mode == "end":
 
-    company = session["Company"]
+    company = session.get("Company", "")
     st.info(f"Company: {company}")
     st.caption("Session in progress — company locked")
     range_start = float(session.get("Range Start", 0))
@@ -455,10 +476,16 @@ if mode == "end":
             kwh = round(kwh_manual, 2)
 
         # Use range based calculation if available
-        elif range_end > range_start and full_range > 0:
-            range_delta = range_end - range_start
-            perc_gained = range_delta / full_range
-            kwh = round(perc_gained * battery_capacity, 2)
+        elif (
+            range_end > range_start
+            and full_range > 0
+            and range_end <= full_range
+            and range_start <= full_range
+            ):
+                range_delta = range_end - range_start
+                perc_gained = range_delta / full_range
+                kwh = round(perc_gained * battery_capacity, 2)
+
 
         # Fallback to battery %
         else:
@@ -568,11 +595,15 @@ with tab_admin:
 
     with st.expander("🔧 Vehicle Parameters"):
         cap = st.number_input("Total battery capacity (kWh)", step=1.0, value=battery_capacity)
+        rng = st.number_input("Full vehicle range (miles)", step=1.0, value=full_range)
+
 
         if st.button("Save Parameters"):
-            write_csv_s3(pd.DataFrame([{"BatteryCapacity_kWh": cap}]), CONFIG_FILE)
-            st.success("Parameters saved!")
-            st.rerun()
+            write_csv_s3(pd.DataFrame([{
+                "BatteryCapacity_kWh": cap,
+                "FullRange": rng
+            }]), CONFIG_FILE)
+
 
     with st.expander("⚙️ Set Prices"):
 
