@@ -203,16 +203,90 @@ battery_capacity = float(config.iloc[0]["BatteryCapacity_kWh"])
 full_range = float(config.iloc[0]["FullRange"])
 
 
+def prepare_analytics(df):
+
+    df = df.copy()
+
+    df["Timestamp Start"] = pd.to_datetime(df["Timestamp Start"], errors="coerce")
+
+    df["Year"]  = df["Timestamp Start"].dt.year
+    df["Month"] = df["Timestamp Start"].dt.to_period("M").astype(str)
+    df["Week"]  = df["Timestamp Start"].dt.to_period("W").astype(str)
+
+    return df
+
+def aggregate_costs(df, period):
+
+    group_map = {
+        "Week": "Week",
+        "Month": "Month",
+        "Year": "Year"
+    }
+
+    col = group_map[period]
+
+    agg = (
+        df.groupby([col, "Location"])
+          .agg(
+              Total_Cost=("Total Cost", "sum"),
+              Sessions=("Total Cost", "count"),
+              Total_kWh=("kWh", "sum")
+          )
+          .reset_index()
+    )
+
+    agg["Avg_Cost_per_Session"] = agg["Total_Cost"] / agg["Sessions"]
+    agg["Avg_Cost_per_kWh"] = agg["Total_Cost"] / agg["Total_kWh"]
+
+    return agg.sort_values(col, ascending=False)
+
+
 # ---------- UI ----------
 
 st.title("🔌 Charging Log")
-tab_log, tab_history, tab_admin = st.tabs([
+tab_log, tab_history, tab_admin, tab_insights = st.tabs([
     "📝 Log Charging",
     "📊 History",
-    "⚙️ Configure Prices"
+    "⚙️ Configure Prices",
+    "📈 Insights"
 ])
 
 
+with tab_insights:
+
+    st.subheader("📈 Charging Insights")
+
+    df = read_csv_s3(LOG_FILE)
+
+    if len(df) == 0:
+        st.info("No data yet.")
+        st.stop()
+
+    df = prepare_analytics(df)
+
+    period = st.selectbox("Aggregation level", ["Week", "Month", "Year"])
+    location_filter = st.selectbox("Location filter", ["All", "Home", "Public"])
+
+    if location_filter != "All":
+        df = df[df["Location"] == location_filter]
+
+    agg = aggregate_costs(df, period)
+
+    st.dataframe(agg, use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Summary KPIs")
+
+    total_spent = df["Total Cost"].sum()
+    avg_session = df["Total Cost"].mean()
+    avg_kwh = (df["Total Cost"].sum() / df["kWh"].sum()) if df["kWh"].sum() > 0 else 0
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Total spent", f"£{total_spent:,.2f}")
+    c2.metric("Avg session cost", f"£{avg_session:,.2f}")
+    c3.metric("Avg price per kWh", f"£{avg_kwh:,.2f}")
 
 
 with tab_log:
