@@ -142,13 +142,17 @@ def get_weighted_price(row, start_dt, end_dt):
 
 def load_session():
     df = read_csv_s3(SESSION_FILE, [
-                                        "Timestamp Start",
-                                        "Location",
-                                        "Company",
-                                        "Battery Start %",
-                                        "Range Start"
-                                    ]
-                    )
+        "Timestamp Start",
+        "Location",
+        "Company",
+        "Battery Start %",
+        "Range Start"
+    ])
+
+    if len(df) == 0:
+        return None
+
+    return df.iloc[0].to_dict()
 
 
 def save_session(data):
@@ -400,7 +404,7 @@ with tab_log:
 
         if st.button("Start Charging"):
             save_session({
-                        "Timestamp Start": start_ts,
+                        "Timestamp Start": start_ts.strftime("%Y-%m-%d %H:%M:%S"),
                         "Location": location,
                         "Company": company,
                         "Battery Start %": bat_start,
@@ -410,152 +414,152 @@ with tab_log:
             st.success("Session started!")
             st.rerun()
 
-if mode == "end":
+    elif mode == "end":
 
-    company = session.get("Company", "")
-    st.info(f"Company: {company}")
-    st.caption("Session in progress — company locked")
-    range_start = float(session.get("Range Start", 0))
-    bat_end = st.number_input("Battery end (%)", min_value=0, max_value=100)
-    range_end = st.number_input("Estimated range at end (miles)", min_value=0)
-    st.subheader("End Time")
-    c1, c2 = st.columns(2)
-    with c1:
-        end_hour = st.selectbox(
-            "Hour",
-            list(range(0, 24)),
-            format_func=lambda x: f"{x:02d}",
-            key="end_hour"
+        company = session.get("Company", "")
+        st.info(f"Company: {company}")
+        st.caption("Session in progress — company locked")
+        range_start = float(session.get("Range Start", 0))
+        bat_end = st.number_input("Battery end (%)", min_value=0, max_value=100)
+        range_end = st.number_input("Estimated range at end (miles)", min_value=0)
+        st.subheader("End Time")
+        c1, c2 = st.columns(2)
+        with c1:
+            end_hour = st.selectbox(
+                "Hour",
+                list(range(0, 24)),
+                format_func=lambda x: f"{x:02d}",
+                key="end_hour"
+            )
+
+        with c2:
+            end_minute = st.selectbox(
+                "Minute",
+                list(range(0, 60)),
+                format_func=lambda x: f"{x:02d}",
+                key="end_min"
+            )
+
+        end_time = time(end_hour, end_minute)
+
+        start_ts = pd.to_datetime(session["Timestamp Start"])
+        end_ts = datetime.combine(start_ts.date(), end_time)
+        if end_ts <= start_ts:
+            end_ts += pd.Timedelta(days=1)  # assume charging passed midnight
+
+        charge_speed = st.number_input("Estimated charging speed (kW - optional)", step=0.001)
+    
+        # Only on public charging, optional
+        total_manual = None
+        if session["Location"] == "Public":
+            total_manual = st.number_input("Total Price (optional)", step=0.01)
+
+        duration_hours = round((end_ts - start_ts).total_seconds() / 3600, 2)
+        st.info(f"⏱ Duration: {duration_hours} h")
+
+        # Auto Estimating
+        battery_delta = bat_end - float(session["Battery Start %"])
+        kwh_from_battery = round((battery_delta / 100) * battery_capacity, 2) if battery_delta > 0 else 0
+        kwh_from_speed = round(charge_speed * duration_hours, 2) if charge_speed > 0 else 0
+
+        # Smart suggestion
+        suggested_kwh = kwh_from_speed if charge_speed > 0 else kwh_from_battery
+
+        kwh_manual = st.number_input(
+            "kWh (optional)",
+            value=float(suggested_kwh) if suggested_kwh > 0 else 0.0,
+            step=0.001
         )
 
-    with c2:
-        end_minute = st.selectbox(
-            "Minute",
-            list(range(0, 60)),
-            format_func=lambda x: f"{x:02d}",
-            key="end_min"
-        )
 
-    end_time = time(end_hour, end_minute)
+        if st.button("Finish Charging"):
 
-    start_ts = pd.to_datetime(session["Timestamp Start"])
-    end_ts = datetime.combine(start_ts.date(), end_time)
-    if end_ts <= start_ts:
-        end_ts += pd.Timedelta(days=1)  # assume charging passed midnight
+            # ---------- kWh calculation priority ----------
 
-    charge_speed = st.number_input("Estimated charging speed (kW - optional)", step=0.001)
- 
-    # Only on public charging, optional
-    total_manual = None
-    if session["Location"] == "Public":
-        total_manual = st.number_input("Total Price (optional)", step=0.01)
+            if kwh_manual > 0:
+                kwh = round(kwh_manual, 2)
 
-    duration_hours = round((end_ts - start_ts).total_seconds() / 3600, 2)
-    st.info(f"⏱ Duration: {duration_hours} h")
-
-    # Auto Estimating
-    battery_delta = bat_end - float(session["Battery Start %"])
-    kwh_from_battery = round((battery_delta / 100) * battery_capacity, 2) if battery_delta > 0 else 0
-    kwh_from_speed = round(charge_speed * duration_hours, 2) if charge_speed > 0 else 0
-
-    # Smart suggestion
-    suggested_kwh = kwh_from_speed if charge_speed > 0 else kwh_from_battery
-
-    kwh_manual = st.number_input(
-        "kWh (optional)",
-        value=float(suggested_kwh) if suggested_kwh > 0 else 0.0,
-        step=0.001
-    )
+            # Use range based calculation if available
+            elif (
+                range_end > range_start
+                and full_range > 0
+                and range_end <= full_range
+                and range_start <= full_range
+                ):
+                    range_delta = range_end - range_start
+                    perc_gained = range_delta / full_range
+                    kwh = round(perc_gained * battery_capacity, 2)
 
 
-    if st.button("Finish Charging"):
+            # Fallback to battery %
+            else:
+                delta = bat_end - float(session["Battery Start %"])
 
-        # ---------- kWh calculation priority ----------
+                # if not (0 <= bat_end <= 100):
+                #     st.error("Final battery must be between 0 and 100%.")
+                #     st.stop()
 
-        if kwh_manual > 0:
-            kwh = round(kwh_manual, 2)
+                # if delta <= 0:
+                #     st.error("Final battery must be greater than the initial.")
+                #     st.stop()
 
-        # Use range based calculation if available
-        elif (
-            range_end > range_start
-            and full_range > 0
-            and range_end <= full_range
-            and range_start <= full_range
-            ):
-                range_delta = range_end - range_start
-                perc_gained = range_delta / full_range
-                kwh = round(perc_gained * battery_capacity, 2)
-
-
-        # Fallback to battery %
-        else:
-            delta = bat_end - float(session["Battery Start %"])
-
-            # if not (0 <= bat_end <= 100):
-            #     st.error("Final battery must be between 0 and 100%.")
-            #     st.stop()
-
-            # if delta <= 0:
-            #     st.error("Final battery must be greater than the initial.")
-            #     st.stop()
-
-            kwh = round((delta / 100) * battery_capacity, 2)
+                kwh = round((delta / 100) * battery_capacity, 2)
 
 
 
-        if session["Location"] == "Home":
-            if len(house_prices) == 0:
-                st.error("Please configure the home price first.")
-                st.stop()
-            row = house_prices.iloc[0]
+            if session["Location"] == "Home":
+                if len(house_prices) == 0:
+                    st.error("Please configure the home price first.")
+                    st.stop()
+                row = house_prices.iloc[0]
 
-        else:
-            match = public_prices[public_prices["Company"] == session["Company"]]
+            else:
+                match = public_prices[public_prices["Company"] == session["Company"]]
 
-            if len(match) == 0:
-                st.error("Company price not found.")
-                st.stop()
+                if len(match) == 0:
+                    st.error("Company price not found.")
+                    st.stop()
 
-            row = match.iloc[0]
+                row = match.iloc[0]
 
-        # If manual price entered, recalculate price per kWh
-        if total_manual is not None and total_manual > 0:
-            total = total_manual
-            price = round(total / kwh, 4)
-        else:
-            price = get_weighted_price(row, start_ts, end_ts)
-            total = round(price * kwh, 2)
+            # If manual price entered, recalculate price per kWh
+            if total_manual is not None and total_manual > 0:
+                total = total_manual
+                price = round(total / kwh, 4)
+            else:
+                price = get_weighted_price(row, start_ts, end_ts)
+                total = round(price * kwh, 2)
 
-        # Show charging cost, if charging at home
-        if session["Location"] == "Home":
-            st.session_state.last_home_cost = total
-        else:
-            st.session_state.last_home_cost = None
-
-
-        new_row = pd.DataFrame([{
-                                "Timestamp Start": start_ts.strftime("%Y-%m-%d %H:%M:%S"),
-                                "Timestamp End": end_ts.strftime("%Y-%m-%d %H:%M:%S"),
-                                "Duration Hours": duration_hours,
-                                "Location": session["Location"],
-                                "Company": session["Company"],
-                                "Battery Start %": session["Battery Start %"],
-                                "Battery End %": bat_end,
-                                "Range Start": session.get("Range Start", None),  # NEW
-                                "Range End": range_end,                           # NEW
-                                "kWh": kwh,
-                                "Price per kWh": price,
-                                "Total Cost": total
-                            }])
+            # Show charging cost, if charging at home
+            if session["Location"] == "Home":
+                st.session_state.last_home_cost = total
+            else:
+                st.session_state.last_home_cost = None
 
 
+            new_row = pd.DataFrame([{
+                                    "Timestamp Start": start_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "Timestamp End": end_ts.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "Duration Hours": duration_hours,
+                                    "Location": session["Location"],
+                                    "Company": session["Company"],
+                                    "Battery Start %": session["Battery Start %"],
+                                    "Battery End %": bat_end,
+                                    "Range Start": session.get("Range Start", None),  # NEW
+                                    "Range End": range_end,                           # NEW
+                                    "kWh": kwh,
+                                    "Price per kWh": price,
+                                    "Total Cost": total
+                                }])
 
-        log_df = pd.concat([log_df, new_row], ignore_index=True)[LOG_COLUMNS]
-        write_csv_s3(log_df, LOG_FILE)
 
-        clear_session()
-        st.success("Charging finished!")
-        st.rerun()
+
+            log_df = pd.concat([log_df, new_row], ignore_index=True)[LOG_COLUMNS]
+            write_csv_s3(log_df, LOG_FILE)
+
+            clear_session()
+            st.success("Charging finished!")
+            st.rerun()
 
 with tab_history:
 
