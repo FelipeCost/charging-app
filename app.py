@@ -287,14 +287,24 @@ with tab_perf:
     df["kWh"] = pd.to_numeric(df["kWh"], errors="coerce")
     df["Duration Hours"] = pd.to_numeric(df["Duration Hours"], errors="coerce")
 
-    # remove invalid rows
     df = df[df["Duration Hours"] > 0]
 
-    # charging speed
+    # ---------- FILTERS ----------
+    df["Year"]  = df["Timestamp Start"].dt.year
+    df["Month"] = df["Timestamp Start"].dt.to_period("M").astype(str)
+    df["Week"]  = df["Timestamp Start"].dt.to_period("W").astype(str)
+
+    period = st.selectbox("Aggregation level", ["Week", "Month", "Year"], key="perf_period")
+    location_filter = st.selectbox("Location filter", ["All", "Home", "Public"], key="perf_loc")
+
+    if location_filter != "All":
+        df = df[df["Location"] == location_filter]
+
+    # ---------- SPEED CALC ----------
     df["Speed_kW"] = df["kWh"] / df["Duration Hours"]
 
     # ---------- GLOBAL KPIs ----------
-    st.subheader("Overall KPIs")
+    st.subheader("Summary KPIs")
 
     total_kwh = df["kWh"].sum()
     total_hours = df["Duration Hours"].sum()
@@ -309,11 +319,15 @@ with tab_perf:
 
     st.divider()
 
-    # ---------- LOCATION BREAKDOWN ----------
-    st.subheader("Speed by location")
+    # ---------- AGGREGATION ----------
+    group_col = period
 
-    loc_stats = (
-        df.groupby("Location")
+    group_cols = [group_col]
+    if location_filter == "All":
+        group_cols.append("Location")
+
+    agg = (
+        df.groupby(group_cols)
           .agg(
               Avg_Speed=("Speed_kW", "mean"),
               Median_Speed=("Speed_kW", "median"),
@@ -323,20 +337,19 @@ with tab_perf:
           )
           .round(2)
           .reset_index()
+          .sort_values(group_col, ascending=False)
     )
 
-    st.dataframe(loc_stats, use_container_width=True)
+    st.subheader("Aggregated Performance")
+
+    st.dataframe(agg, use_container_width=True)
 
     st.divider()
 
-    # ---------- SESSION DISTRIBUTION ----------
+    # ---------- DISTRIBUTION ----------
     st.subheader("Charging speed distribution")
 
     st.bar_chart(df["Speed_kW"])
-
-
-
-
 
 
 
