@@ -264,12 +264,80 @@ def aggregate_costs(df, period, include_location=True):
 # ---------- UI ----------
 
 st.title("🔌 Charging Log")
-tab_log, tab_history, tab_admin, tab_insights = st.tabs([
+tab_log, tab_history, tab_admin, tab_insights, tab_perf = st.tabs([
     "📝 Log Charging",
     "📊 History",
     "⚙️ Configure Prices",
-    "📈 Insights"
+    "📈 Financial Insights",
+    "⚡ Charging Performance"
 ])
+
+with tab_perf:
+
+    st.subheader("⚡ Charging Performance Insights")
+
+    df = read_csv_s3(LOG_FILE)
+
+    if len(df) == 0:
+        st.info("No data yet.")
+        st.stop()
+
+    # ---- Ensure types ----
+    df["Timestamp Start"] = pd.to_datetime(df["Timestamp Start"], errors="coerce")
+    df["kWh"] = pd.to_numeric(df["kWh"], errors="coerce")
+    df["Duration Hours"] = pd.to_numeric(df["Duration Hours"], errors="coerce")
+
+    # remove invalid rows
+    df = df[df["Duration Hours"] > 0]
+
+    # charging speed
+    df["Speed_kW"] = df["kWh"] / df["Duration Hours"]
+
+    # ---------- GLOBAL KPIs ----------
+    st.subheader("Overall KPIs")
+
+    total_kwh = df["kWh"].sum()
+    total_hours = df["Duration Hours"].sum()
+    avg_speed = total_kwh / total_hours if total_hours > 0 else 0
+    median_speed = df["Speed_kW"].median()
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Total energy charged", f"{total_kwh:,.1f} kWh")
+    c2.metric("Average charging speed", f"{avg_speed:,.2f} kW")
+    c3.metric("Median charging speed", f"{median_speed:,.2f} kW")
+
+    st.divider()
+
+    # ---------- LOCATION BREAKDOWN ----------
+    st.subheader("Speed by location")
+
+    loc_stats = (
+        df.groupby("Location")
+          .agg(
+              Avg_Speed=("Speed_kW", "mean"),
+              Median_Speed=("Speed_kW", "median"),
+              Sessions=("Speed_kW", "count"),
+              Total_kWh=("kWh", "sum"),
+              Total_Hours=("Duration Hours", "sum")
+          )
+          .round(2)
+          .reset_index()
+    )
+
+    st.dataframe(loc_stats, use_container_width=True)
+
+    st.divider()
+
+    # ---------- SESSION DISTRIBUTION ----------
+    st.subheader("Charging speed distribution")
+
+    st.bar_chart(df["Speed_kW"])
+
+
+
+
+
 
 
 with tab_insights:
